@@ -1,0 +1,647 @@
+---
+title: "ClusterorNo"
+author: "Zoe Schroder"
+date: "1/9/2019"
+output: html_document
+---
+Set working directory and load packages.
+```{r}
+suppressMessages(library(lubridate))
+suppressMessages(library(sf))
+suppressMessages(library(tmap))
+suppressMessages(library(USAboundaries))
+suppressMessages(library(rgeos))
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(raster))
+suppressMessages(library(lubridate))
+```
+
+## Part 1: Tornado Data
+
+Download the tornado data from the Storm Prediction Center (SPC) http://www.spc.noaa.gov/gis/svrgis/. This database includes all tornadoes from 1950 to 2016 in a shapefile. A description of all column headings and units can be found here: http://www.spc.noaa.gov/wcm/data/SPC_severe_database_description.pdf 
+```{r, eval = FALSE}
+download.file(url = "http://www.spc.noaa.gov/gis/svrgis/zipped/1950-2017-torn-initpoint.zip",
+              destfile = "tornado.zip", mode = "wb")
+unzip("tornado.zip")
+```
+
+Load the shapefile into R using the `read_sf` function from the **sf** package.
+```{r, eval = FALSE}
+Torn.sf <- read_sf(dsn = "1950-2017-torn-initpoint", 
+                   layer = "1950-2017-torn-initpoint", 
+                   stringsAsFactors = FALSE)
+```
+Torn.sf is a 62519 x 22 data frame.
+
+Remove tornadoes in Hawaii, Alaska, and Puerto Rico and those occurring before 1994. That year marks the beginning of the comprehensive WSR-88D radar. For missing EF ratings use the modification rules (if/else) defined here: https://www.spc.noaa.gov/wcm/OneTor_F-scale-modifications.pdf. 
+
+**NOTE: All tornadoes with an EF rating of -9 have a property loss of 0. (These are all 2016 and 2017 tornadoes.) Therefore, you do not need that column to assign a magnitude. **
+```{r, eval = FALSE}
+Torn.sf <- Torn.sf %>%
+  filter(yr >= 1994,
+         !st %in% c("AK", "PR", "HI")) %>%
+  mutate(mag = ifelse(mag == -9 & len <= 5, 0, mag),
+         mag = ifelse(mag == -9 & len > 5, 1, mag))
+```
+
+Add a date/time column also add columns for path length, width, and area in metric units. Leave the time zone as native CDT. Create a convective day (6AM to 6AM) column taking hours 00:00:00 -> 05:59:59 and assigning it to the previous date (this associates the previous day's date to tornadoes occurring up to 6 hours after local midnight).
+```{r, eval = FALSE}
+Torn.sf <- Torn.sf %>%
+  mutate(dy = format(as.Date(date,format="%Y-%m-%d"), "%d"),
+         DateTime = as.POSIXct(paste(yr, mo, dy, time), format = "%Y%m%d%H:%M:%S"),
+         Hour = hour(DateTime),
+         Year = year(DateTime),
+         cDateTime = DateTime - as.difftime(6, unit = "hours"),
+         cDate = as.Date(as_datetime(ifelse(Hour < 6, (DateTime - 86400), cDateTime), tz = Sys.timezone())),
+         Length = len * 1609.34,
+         Length = ifelse(Length == 0, min(Length[Length > 0]), Length), #takes care of zero length
+         Width = wid * .9144,
+         Width = ifelse(Width == 0, min(Width[Width > 0]), Width), #takes care of zero width
+         Width = ifelse(Year >= 1995, Width * pi/4, Width), #takes care of change: avg to max
+         cas = inj + fat,
+         AreaPath = Length * Width,
+         Ma = factor(month.abb[mo], levels = month.abb[1:12])) %>%
+  sf::st_sf()
+max(Torn.sf$yr)
+```
+
+The geometry type is `POINT`. Each tornado is represented as a single point location geometry (start location). 
+
+Add energy dissipation per tornado. Use the empirical model for tornado winds by EF rating taken from Table 3-1 of NRC 2007. Percent area by EF rating for each EF category. Threshold wind speeds (m/s) are a lower bound 3-sec gusts on the operational EF Scale (Table 2-1 of NRC2007). This is based on work by Fricker et al. (2017). The model is
+$$
+E = A_p \rho \sum_{j=0}^{J} w_j v_j^{3},
+$$
+where $A_p$ is the area of the path, $\rho$ is area density [1 kg/m^3]  $v_j$ is the midpoint wind speed for each rating, and $w_j$ is the corresponding fraction of path area by EF rating. With no upper bound on the EF5 wind speeds, the midpoint wind speed is set at 97 m~s$^{-1}$ (7.5 m~s$^{-1}$ above the threshold wind speed consistent with the EF4 midpoint speed relative to its threshold)
+
+Add the energy dissipation per tornado. 
+```{r, eval = FALSE}
+perc <- c(1, 0, 0, 0, 0, 0, 
+          .772, .228, 0, 0, 0, 0,
+          .616, .268, .115, 0, 0, 0,
+          .529, .271, .133, .067, 0, 0,
+          .543, .238, .131, .056, .032, 0,
+          .538, .223, .119, .07, .033, .017)
+percM <- matrix(perc, ncol = 6, byrow = TRUE)
+threshW <- c(29.06, 38.45, 49.62, 60.8, 74.21, 89.41)
+midptW <- c(diff(threshW)/2 + threshW[-length(threshW)], threshW[length(threshW)] + 7.5)
+ef <- Torn.sf$mag + 1
+EW3 <- numeric()
+for(i in 1:length(ef)) EW3[i] = midptW^3 %*% percM[ef[i], ]
+Torn.sf <- Torn.sf %>%
+  mutate(ED = EW3 * AreaPath)
+```
+
+Compute big day-level statistics. Keep only days with at least 10 tornadoes. 
+```{r, eval = FALSE}
+x <- Torn.sf %>%
+  group_by(cDate) %>%
+  summarize(Year = first(Year),
+            Month = first(mo),
+            FirstDate = first(date),
+            LastDate = last(date),
+            DateRange = paste(FirstDate, "to", LastDate),
+            FirstcDate = first(cDate),
+            LastcDate = last(cDate),
+            ncD = n_distinct(cDate),
+            casualties = sum(cas),
+            nT = n(),
+            nT1_5 = sum(mag >= 1),
+            n0 = sum(mag == 0),
+            n1 = sum(mag == 1),
+            n2 = sum(mag == 2),
+            n3 = sum(mag == 3),
+            n4 = sum(mag == 4),
+            n5 = sum(mag == 5),
+            GroupTotalED = sum(ED),
+            GroupTotalEDinTW = paste(round(GroupTotalED/10^12), "TW"),
+            maxEF = max(mag),
+            nD = n_distinct(date),
+            startTime = first(DateTime),
+            middleTime = median(DateTime),
+            finishTime = last(DateTime),
+            Duration = difftime(finishTime, startTime, units = "secs")) %>%
+  filter(nT >= 10)
+dim(x)
+```
+
+
+Convert `middleTime` to UTC.
+```{r}
+attr(x$middleTime, "tzone") <- "UTC"
+head(x$middleTime)
+```
+
+Round the UTC time to nearest 6 hours. This is done with the `align.time()` function from the **xts** package.
+```{r}
+library(xts)
+x$NARRtime <- align.time(x$middleTime, n = 60 * 60 * 3)
+```
+
+
+```{r}
+x <- st_transform(x, 
+  crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
+```
+
+
+Obtain the group day hulls. Transform the CRS to match that of the environmental data raster grids.
+```{r}
+x <- st_convex_hull(x)
+x$HullArea <- st_area(x)
+x <- st_transform(x, 
+  crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
+```
+
+Set the state and county borders. Remove Alaska, Hawaii, and Puerto Rico. 
+```{r}
+sts <- state.name[!state.name %in% c("Alaska", "Hawaii")]
+stateBorders <- us_states(states = sts)
+
+#stateBorders <- st_transform(stateBorders, crs = st_crs(BigDays.sfdfT))
+
+counties <- us_counties()
+counties.sf <- counties %>%
+  filter(!state_abbr %in% c("AK", "PR", "HI")) 
+#counties.sf <- st_transform(counties.sf, crs = st_crs(BigDays.sfdfT))
+```
+
+Plot the hulls for each big day on a map. 
+```{r}
+tm_shape(x) +
+  tm_polygons(alpha = .1) + 
+tm_shape(stateBorders, projection = "laea_NA", is.master = TRUE) + 
+  tm_borders()
+```
+Pull out the individual tornadoes associated with each Big Day. 
+```{r, eval = FALSE}
+groups <- x$cDate
+tornx <- Torn.sf %>%
+  filter(cDate %in% groups) 
+```
+
+```{r}
+a <- x %>%
+  filter(cDate == "2004-06-23")
+a1 <- tornx %>%
+  filter(cDate == "2004-06-23")
+
+b <- x %>%
+  filter(cDate == "2005-06-23")
+b1 <- tornx %>%
+  filter(cDate == "2005-06-23")
+
+c <- x %>%
+  filter(cDate == "2004-05-27")
+c1 <- tornx %>%
+  filter(cDate == "2004-05-27")
+
+d <- x %>%
+  filter(cDate == "1994-04-26")
+d1 <- tornx %>%
+  filter(cDate == "1994-04-26")
+
+e <- x %>%
+  filter(cDate == "2003-05-26")
+e1 <- tornx %>%
+  filter(cDate == "1994-04-26")
+```
+
+```{r}
+tm_shape(a) +
+  tm_polygons(alpha = .1) + 
+tm_shape(stateBorders, projection = "laea_NA", is.master = TRUE) + 
+  tm_borders() +
+tm_shape(a1) +
+  tm_symbols(col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) 
+
+tm_shape(b) +
+  tm_polygons(alpha = .1) + 
+tm_shape(stateBorders, projection = "laea_NA", is.master = TRUE) + 
+  tm_borders() +
+tm_shape(b1) +
+  tm_symbols(col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) 
+
+tm_shape(c) +
+  tm_polygons(alpha = .1) + 
+tm_shape(stateBorders, projection = "laea_NA", is.master = TRUE) + 
+  tm_borders() +
+tm_shape(c1) +
+  tm_symbols(col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) 
+
+tm_shape(d) +
+  tm_polygons(alpha = .1) + 
+tm_shape(stateBorders, projection = "laea_NA", is.master = TRUE) + 
+  tm_borders() +
+tm_shape(d1) +
+  tm_symbols(col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) 
+```
+
+
+########################
+## Clustered Big Days ##
+########################
+
+Load the Big Day data that is clustered. 
+```{r}
+load("BigDays.RData")
+load("BigDayTornadoes.RData")
+```
+
+```{r}
+BigDays.sfdfT <- st_transform(BigDays.sfdfT, 
+  crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
+```
+
+
+Obtain the group day hulls. Transform the CRS to match that of the environmental data raster grids.
+```{r}
+BigDays.sfdfT <- st_convex_hull(BigDays.sfdfT)
+BigDays.sfdfT$HullArea <- st_area(BigDays.sfdfT)
+BigDays.sfdfT <- st_transform(BigDays.sfdfT, 
+  crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
+```
+
+Extract big days to match the unclustered big days. 
+```{r}
+w <- BigDays.sfdfT %>%
+  filter(ID == "200406233318")
+w1 <- Torn.sfT %>%
+  filter(groupNumber == "3318",
+         cDate == "2004-06-23")
+
+x <- BigDays.sfdfT %>%
+  filter(ID == "200506233651")
+x1 <- Torn.sfT %>%
+  filter(groupNumber == "3651",
+         cDate == "2005-06-23")
+
+y <- BigDays.sfdfT %>%
+  filter(ID == "200405273249")
+y1 <- Torn.sfT %>%
+  filter(groupNumber == "3249",
+         cDate == "2004-05-27")
+
+z <- BigDays.sfdfT %>%
+  filter(ID == "1994042658")
+z1 <- Torn.sfT %>%
+  filter(groupNumber == "58",
+         cDate == "1994-04-26")
+```
+
+
+```{r}
+tm_shape(w) +
+  tm_polygons(alpha = .1) + 
+tm_shape(stateBorders) + 
+  tm_borders(col = "gray15", alpha = 1) +
+  tm_compass(size = 3) + tm_scale_bar(width = 0.45, size = 1) +
+tm_shape(w1) +
+  tm_symbols(col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) 
+
+tm_shape(x) +
+  tm_polygons(alpha = .1) + 
+tm_shape(stateBorders) + 
+  tm_borders(col = "gray15", alpha = 1) +
+  tm_compass(size = 3) + tm_scale_bar(width = 0.45, size = 1) +
+tm_shape(x1) +
+  tm_symbols(col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) 
+
+tm_shape(y) +
+  tm_polygons(alpha = .1) + 
+tm_shape(stateBorders) + 
+  tm_borders(col = "gray15", alpha = 1) +
+  tm_compass(size = 3) + tm_scale_bar(width = 0.45, size = 1) +
+tm_shape(y1) +
+  tm_symbols(col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) 
+
+tm_shape(z) +
+  tm_polygons(alpha = .1) + 
+tm_shape(stateBorders) + 
+  tm_borders(col = "gray15", alpha = 1) +
+  tm_compass(size = 3) + tm_scale_bar(width = 0.45, size = 1) +
+tm_shape(z1) +
+  tm_symbols(col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) 
+```
+
+```{r}
+unclus <- rbind(a,b,c,d)
+clus <- rbind(w,x,y,z)
+```
+
+
+## NARR data: 
+Data is downloaded from NCAR's North American Regional Reanalysis (https://rda.ucar.edu/datasets/ds608.0/#!access). It extends from 1-1-1979 to 11-1-2018. Use the NCAR NARR 3-hourly files.  
+
+Spatial Extent: 
+Longitude Range: Westernmost = 148.64E Easternmost = 2.568W
+Latitude Range: Southernmost = 0.897N Northernmost = 85.333N 
+
+The list of all variables can be found here: http://www.emc.ncep.noaa.gov/mmb/rreanl/merged_land_AWIP32.pBigDays.sfdfT 
+
+Create a downloadable string of information  
+```{r}
+clus <- clus %>%
+  mutate(YrMoDa = gsub("-", "", cDate),
+         ztime = 18,
+         slug = paste0("merged_AWIP32.",YrMoDa, ztime))
+clusslug <- clus$slug
+
+unclus <- unclus %>%
+  mutate(YrMoDa = gsub("-", "", cDate),
+         ztime = 18,
+         slug = paste0("merged_AWIP32.",YrMoDa, ztime))
+unclusslug <- unclus$slug
+```
+
+Read the grib files as raster bricks and assign the CAPE and helicity variables to separate raster layers. Extract the average (and extreme) environmental values within each of the big days in large groups hulls. 
+```{r}
+aCAPE <- numeric()
+aHLCY <- numeric()
+aCIN <- numeric()
+aUSTM <- numeric()
+aVSTM <- numeric()
+aBS <- numeric()
+aRATIO <- numeric()
+mCAPE <- numeric()
+mHLCY <- numeric()
+mCIN <- numeric()
+mUSTM <- numeric()
+mVSTM <- numeric()
+mBS <- numeric()
+ 
+library(raster)
+for(i in 1:length(clusslug)){
+  print(i)
+  #rb <- brick(paste0("/Volumes/My Passport for Mac/NCARNARR/All/", BigDays.sfdfT$slug2[i], "/",BigDays.sfdfT$slug[i])) <-- this is for varying NARR times
+   rb <- brick(paste0("/Volumes/My Passport for Mac/PhD_Program/NCARNARR/Files/18Z/", clus$slug[i]))
+  CAPE.rl <- raster(rb, layer = 375)
+  HLCY.rl <- raster(rb, layer = 323)
+  CIN.rl <- raster(rb, layer = 376)
+  USTM.rl <- raster(rb, layer = 324)
+  VSTM.rl <- raster(rb, layer = 325)
+  BS.rl <- sqrt(USTM.rl^2 + VSTM.rl^2)
+  RATIO.rl <- CAPE.rl/abs(CIN.rl)
+  aCAPE <- c(aCAPE, as.numeric(raster::extract(CAPE.rl, clus[i, ], fun = mean)))
+  aHLCY <- c(aHLCY, as.numeric(raster::extract(HLCY.rl, clus[i, ], fun = mean)))
+  aCIN <- c(aCIN, as.numeric(raster::extract(CIN.rl, clus[i, ], fun = mean)))
+  aUSTM <- c(aUSTM, as.numeric(raster::extract(USTM.rl, clus[i, ], fun = mean)))
+  aVSTM <- c(aVSTM, as.numeric(raster::extract(VSTM.rl, clus[i, ], fun = mean)))
+  aBS <- c(aBS, as.numeric(raster::extract(BS.rl, clus[i, ], fun = mean)))
+  aRATIO <- c(aRATIO, as.numeric(raster::extract(RATIO.rl, clus[i, ], fun = mean)))
+  mCAPE <- c(mCAPE, as.numeric(raster::extract(CAPE.rl, clus[i, ], fun = max)))
+  mHLCY <- c(mHLCY, as.numeric(raster::extract(HLCY.rl, clus[i, ], fun = max)))
+  mCIN <- c(mCIN, as.numeric(raster::extract(CIN.rl, clus[i, ], fun = min)))
+  mUSTM <- c(mUSTM, as.numeric(raster::extract(USTM.rl, clus[i, ], fun = max)))
+  mVSTM <- c(mVSTM, as.numeric(raster::extract(VSTM.rl, clus[i, ], fun = max)))
+  mBS <- c(mBS, as.numeric(raster::extract(BS.rl, clus[i, ], fun = max)))
+}
+```
+
+Add environmental data values to the group day means data frame.
+```{r, eval = FALSE}
+clus$aCAPE <- aCAPE
+clus$aHLCY <- aHLCY
+clus$aCIN <- aCIN
+clus$mCAPE <- mCAPE
+clus$mHLCY <- mHLCY
+clus$mCIN <- mCIN
+clus$mUSTM <- mUSTM
+clus$mVSTM <- mVSTM
+clus$aUSTM <- aUSTM
+clus$aVSTM <- aVSTM
+clus$aBS <- aBS
+clus$aRATIO <- aRATIO
+clus$mBS <- mBS
+```
+
+Scale the variables to make them easier to read and input for models. 
+```{r, eval = FALSE}
+clus$aCAPE2 <- clus$aCAPE/1000
+clus$aHLCY2 <- clus$aHLCY/100
+clus$aCIN2 <- clus$aCIN/100
+clus$aBS2 <- clus$aBS/10
+clus$aUSTM2 <- clus$aUSTM/10
+clus$aVSTM2 <- clus$aVSTM/10
+
+clus$mCAPE2 <- clus$mCAPE/1000
+clus$mHLCY2 <- clus$mHLCY/100
+clus$mCIN2 <- clus$mCIN/100
+clus$mBS2 <- clus$mBS/10
+clus$mUSTM2 <- clus$mUSTM/10
+clus$mVSTM2 <- clus$mVSTM/10
+```
+
+Save the data. 
+```{r}
+save(clus, file = "clus.RData")
+load("clus.RData")
+dim(clus)
+```
+
+####################
+## June 23, 2004: ##
+####################
+
+```{r}
+compclus <- clus[1,]
+compunclus <- unclus[1,]
+```
+
+```{r}
+tm_shape(stateBorders) + 
+  tm_borders(col = "gray15", alpha = 1) +
+  tm_compass(size = 3) + tm_scale_bar(width = 0.45, size = 1) + 
+tm_shape(compunclus) +
+  tm_polygons(alpha = .1, col = "blue") + 
+tm_shape(compclus) +
+  tm_polygons(alpha = .1, col = "red") +
+tm_shape(a1) +
+  tm_symbols(size = 0.1, col = "blue",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) +
+tm_shape(w1) +
+  tm_symbols(size = 0.1, col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE)
+
+```
+Cluster: 
+aCAPE: 644.4
+aHLCY: 238.67
+aCIN: -37.63
+aBS: 17.51
+mCAPE: 1420
+mHLCY: 263.3
+mCIN: -83.1
+mBS: 19.79
+
+Uncluster: 
+aCAPE: 246.21
+aHLCY: 70.4
+aCIN: -30.74
+aBS: 12.53
+mCAPE: 2170
+mHLCY: 263.3
+mCIN: -271.1
+mBS: 26.87
+
+####################
+## June 23, 2005: ##
+####################
+```{r}
+compclus <- clus[2,]
+compunclus <- unclus[2,]
+```
+
+```{r}
+tm_shape(stateBorders) + 
+  tm_borders(col = "gray15", alpha = 1) +
+  tm_compass(size = 3) + tm_scale_bar(width = 0.45, size = 1) + 
+tm_shape(compunclus) +
+  tm_polygons(alpha = .1, col = "blue") + 
+tm_shape(compclus) +
+  tm_polygons(alpha = .1, col = "red") +
+tm_shape(b1) +
+  tm_symbols(size = 0.1, col = "blue",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) +
+tm_shape(x1) +
+  tm_symbols(size = 0.1, col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE)
+
+```
+
+Cluster: 
+aCAPE: 4816
+aHLCY: 116.71
+aCIN: -80.14
+aBS: 9.38
+mCAPE: 5320 
+mHLCY: 134.74
+mCIN: -160.86 
+mBS: 10.34
+
+Uncluster: 
+aCAPE: 1022.5
+aHLCY: 39.96
+aCIN: -85.3
+aBS: 9.26
+mCAPE: 5320
+mHLCY: 184.74
+mCIN: -355.86
+mBS: 20.8
+
+###################
+## May 27, 2004: ##
+###################
+
+```{r}
+compclus <- clus[3,]
+compunclus <- unclus[3,]
+```
+
+```{r}
+tm_shape(stateBorders) + 
+  tm_borders(col = "gray15", alpha = 1) +
+  tm_compass(size = 3) + tm_scale_bar(width = 0.45, size = 1) + 
+tm_shape(compunclus) +
+  tm_polygons(alpha = .1, col = "blue") + 
+tm_shape(compclus) +
+  tm_polygons(alpha = .1, col = "red") +
+tm_shape(c1) +
+  tm_symbols(size = 0.1, col = "blue",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) +
+tm_shape(y1) +
+  tm_symbols(size = 0.1, col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE)
+
+```
+Cluster: 
+aCAPE: 2465.5
+aHLCY: 125.3
+aCIN: -4.53
+aBS: 16.2
+mCAPE: 3500
+mHLCY: 155
+mCIN: -14.2
+mBS: 18.1
+
+Uncluster: 
+aCAPE: 687.2
+aHLCY: 80.8
+aCIN: -33.36
+aBS: 14.8
+mCAPE: 3500
+mHLCY: 341.6
+mCIN: -214.2
+mBS: 21.1
+
+#####################
+## April 26, 1994: ##
+#####################
+
+```{r}
+compclus <- clus[4,]
+compunclus <- unclus[4,]
+```
+
+```{r}
+tm_shape(stateBorders) + 
+  tm_borders(col = "gray15", alpha = 1) +
+  tm_compass(size = 3) + tm_scale_bar(width = 0.45, size = 1) + 
+tm_shape(compunclus) +
+  tm_polygons(alpha = .1, col = "blue") + 
+tm_shape(compclus) +
+  tm_polygons(alpha = .1, col = "red") +
+tm_shape(d1) +
+  tm_symbols(size = 0.1, col = "blue",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE) +
+tm_shape(z1) +
+  tm_symbols(size = 0.1, col = "red",
+             title.size = "Count", 
+             legend.size.is.portrait = FALSE)
+
+```
+Cluster: 
+aCAPE: 2967.8
+aHLCY: 128,9
+aCIN: -6.8
+aBS: 15.1
+mCAPE: 4970
+mHLCY: 199.1
+mCIN: -52.2
+mBS: 24.1
+
+Uncluster: 
+aCAPE: 1259.4
+aHLCY: 104.5
+aCIN: -5.98
+aBS: 17.4
+mCAPE: 4970
+mHLCY: 244.1
+mCIN: -86.24
+mBS: 37.4
+
+** WRITE SOMETHING ABOUT THE NEED FOR CLUSTERING **
+
