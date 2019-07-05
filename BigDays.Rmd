@@ -5,7 +5,9 @@ date: "4/11/2019"
 output: html_document
 ---
 
-Set working directory and load packages. Suppress the messages so they do not clutter the screen! 
+## Part 1: Tornado data
+
+Load packages and suppress the messages of the packages. 
 ```{r}
 suppressMessages(library(lubridate))
 suppressMessages(library(sf))
@@ -14,43 +16,42 @@ suppressMessages(library(USAboundaries))
 suppressMessages(library(rgeos))
 suppressMessages(library(dplyr))
 suppressMessages(library(ggplot2))
-suppressMessages(library(raster))
-suppressMessages(library(lubridate))
 suppressMessages(library(xts))
+suppressMessages(library(raster))
+suppressMessages(library(dplyr))
+suppressMessages(library(ggplot2))
+suppressMessages(library(lme4))
+suppressMessages(library(xtable))
+suppressMessages(library(ggrepel))
+suppressMessages(library(viridis))
+suppressMessages(library(gridExtra))
 ```
 
 ##########################
 ## Part 1: Tornado Data ##
 ##########################
 
-Download the tornado data from the Storm Prediction Center (SPC) http://www.spc.noaa.gov/gis/svrgis/. This database includes all tornadoes from 1950 to 2016 in a shapefile. A description of all column headings and units can be found here: http://www.spc.noaa.gov/wcm/data/SPC_severe_database_description.pdf 
-```{r, eval = FALSE}
-download.file(url = "http://www.spc.noaa.gov/gis/svrgis/zipped/1950-2017-torn-initpoint.zip",
-              destfile = "tornado.zip", mode = "wb")
-unzip("tornado.zip")
+The newest GIS shapefile contains missing geometries for more than 30% of the tornadoes. The number of missing geometries is highest after 1995. Instead here we use the csv file from https://www.spc.noaa.gov/wcm/#data  Use the start lon/lat and create a `sp` object then convert to `sf`. Set the coordinate reference system (crs) to ESPG 4326.
+```{r}
+Tor.spdf <- read.csv(file = "1950-2017_actual_tornadoes.csv")
+sp::coordinates(Tor.spdf) <- ~ slon + slat
+Tor.sfdf <- st_as_sf(Tor.spdf)
+st_crs(Tor.sfdf) <- 4326
 ```
 
-Load the shapefile into R using the `read_sf` function from the **sf** package. Set `stringsAsFactors` to **FALSE** so that the character vectors are not converted to factors. 
-```{r, eval = FALSE}
-Torn.sf <- read_sf(dsn = "1950-2017-torn-initpoint", 
-                   layer = "1950-2017-torn-initpoint", 
-                   stringsAsFactors = FALSE)
-```
-Torn.sf is a 62519 x 22 data frame.
-
-Remove tornadoes in Hawaii, Alaska, and Puerto Rico and those occurring before 1994. That year marks the beginning of the comprehensive WSR-88D radar. For missing EF ratings use the modification rules (if/else) defined here: https://www.spc.noaa.gov/wcm/OneTor_F-scale-modifications.pdf. **NOTE: All tornadoes with an EF rating of -9 have a property loss of 0. (These are all 2016 and 2017 tornadoes.) Therefore, you do not need that column to assign a magnitude. **
-```{r, eval = FALSE}
-Torn.sf <- Torn.sf %>%
+Remove tornadoes in Hawaii, Alaska, and Puerto Rico and those occurring before 1994. That year marks the beginning of comprehensive WSR-88D radar. For missing EF ratings use the modification rules (if/else) defined here: https://www.spc.noaa.gov/wcm/OneTor_F-scale-modifications.pdf 
+```{r}
+All_Tornadoes <- Tor.sfdf %>%
   filter(yr >= 1994,
          !st %in% c("AK", "PR", "HI")) %>%
   mutate(mag = ifelse(mag == -9 & len <= 5, 0, mag),
          mag = ifelse(mag == -9 & len > 5, 1, mag))
 ```
 
-Add a date/time column also add columns for path length, width, and area in metric units. Leave the time zone as native CDT. Create a convective day (6AM to 6AM) column taking hours 00:00:00 -> 05:59:59 and assigning it to the previous date (this associates the previous day's date to tornadoes occurring up to 6 hours after local midnight). The length needs to be converted to meters from miles and 0 lengths need to be assigned a value. The width of the tornado tracks need to be changed to meters from yard and 0 widths need to be assigned a value. Add a casualties column (injuries and fatalities). Calculate the area of the tornado path. Create a column with the name of the months. 
-```{r, eval = FALSE}
-Torn.sf <- Torn.sf %>%
-  mutate(dy = format(as.Date(date,format="%Y-%m-%d"), "%d"),
+Add a data/time column also add columns for path length, width, and area in metric units. Leave the time zone as native CDT. Create a convective day (6AM to 6AM) column taking hours 00:00:00 -> 05:59:59 and assigning it to the previous date (this associates the previous day's date to tornadoes occurring up to 6 hours after local midnight).
+```{r}
+All_Tornadoes <- All_Tornadoes %>%
+  mutate(dy = format(as.Date(date,format="%m/%d/%y"), "%d"),
          DateTime = as.POSIXct(paste(yr, mo, dy, time), format = "%Y%m%d%H:%M:%S"),
          Hour = hour(DateTime),
          Year = year(DateTime),
@@ -65,18 +66,16 @@ Torn.sf <- Torn.sf %>%
          AreaPath = Length * Width,
          Ma = factor(month.abb[mo], levels = month.abb[1:12])) %>%
   sf::st_sf()
-max(Torn.sf$yr)
+dim(All_Tornadoes)[1]
 ```
 
-The geometry type is `POINT`. Each tornado is represented as a single point location geometry (start location). 
+The geometry type is `POINT`. Each tornado is represented as a single point location geometry (start location). Add power dissipation per tornado.
 
-Add energy dissipation per tornado. Use the empirical model for tornado winds by EF rating taken from Table 3-1 of NRC 2007. Percent area by EF rating for each EF category. Threshold wind speeds (m/s) are a lower bound 3-sec gusts on the operational EF Scale (Table 2-1 of NRC2007). This is based on work by Fricker et al. (2017). The model is
+Add power dissipation per tornado. Use the empirical model for tornado winds by EF rating taken from Table 3-1 of NRC 2007. Percent area by EF rating for each EF category. Threshold wind speeds (m/s) are a lower bound 3-sec gusts on the operational EF Scale (Table 2-1 of NRC2007). This is based on work by Fricker et al. (2017). The model is
 $$
 E = A_p \rho \sum_{j=0}^{J} w_j v_j^{3},
 $$
 where $A_p$ is the area of the path, $\rho$ is area density [1 kg/m^3]  $v_j$ is the midpoint wind speed for each rating, and $w_j$ is the corresponding fraction of path area by EF rating. With no upper bound on the EF5 wind speeds, the midpoint wind speed is set at 97 m~s$^{-1}$ (7.5 m~s$^{-1}$ above the threshold wind speed consistent with the EF4 midpoint speed relative to its threshold)
-
-Add the energy dissipation per tornado. 
 ```{r, eval = FALSE}
 perc <- c(1, 0, 0, 0, 0, 0, 
           .772, .228, 0, 0, 0, 0,
@@ -87,24 +86,22 @@ perc <- c(1, 0, 0, 0, 0, 0,
 percM <- matrix(perc, ncol = 6, byrow = TRUE)
 threshW <- c(29.06, 38.45, 49.62, 60.8, 74.21, 89.41)
 midptW <- c(diff(threshW)/2 + threshW[-length(threshW)], threshW[length(threshW)] + 7.5)
-ef <- Torn.sf$mag + 1
+ef <- All_Tornadoes$mag + 1
 EW3 <- numeric()
 for(i in 1:length(ef)) EW3[i] = midptW^3 %*% percM[ef[i], ]
-Torn.sf <- Torn.sf %>%
+All_Tornadoes <- All_Tornadoes %>%
   mutate(ED = EW3 * AreaPath)
-```
+``` 
 
 Determine the distance between tornadoes in space and time. Use a projection, not lat/lon. See https://epsg.io/102004. Extract the coordinates of the start locations as a N by 2 matrix, where N is the number of tornadoes. Also extract the date-time as a vector of class `POSIXct`.
-```{r, eval = FALSE}
-Torn.sfT <- st_transform(Torn.sf, crs = 102004)
-space <- st_coordinates(Torn.sfT)
-time <- Torn.sf$DateTime
+```{r}
+All_Tornadoes <- st_transform(All_Tornadoes, crs = 102004)
+space <- st_coordinates(All_Tornadoes)
+time <- All_Tornadoes$DateTime
 ```
 
-Next compute pairwise Euclidean distances in space and, separately, in time using the `dist()` function. Divide the spatial distance by 15 so that the values are commensurate with the time 'distance' based on the assumption of 15 meters every second for an average speed of tornado-generating storms. This value of 15 m/s was calculated using the average storm motion on each big day. 
-
-Compare: Distance from New York to Denver is 2.622 x 10^6 meters. There are 3.154 x 10^7 seconds in a year. This will capture the historic multiday tornado outbreaks. For analysis we want to consider each day in the multiday group separately. As the value of the divisor increases cluster areas get larger. Remove `ds` and `dt` to free memory.
-```{r, eval = FALSE}
+Next compute pairwise Euclidean distances in space and, separately, in time using the `dist()` function. Divide the spatial distance by 15 so that the values are commensurate with the time 'distance' based on the assumption of 15 meters per second (~34 mph) for an average speed of tornado-generating storms. Compare: Distance from New York to Denver is 2.622 x 10^6 meters. There are 3.154 x 10^7 seconds in a year. This will capture the historic multiday tornado outbreaks. For analysis we want to consider each day in the multiday group separately. As the value of the divisor increases cluster areas get larger. Remove `ds` and `dt` to free memory. Distances are saved as an object of class `dist` containing a vector of length N * (N-1)/2, which is the number of unique point pairs.
+```{r}
 ds <- dist(space) / 15
 dt <- dist(time)
 dst <- ds + dt
@@ -118,7 +115,7 @@ Next group the tornadoes based on the space-time distances. This is done with th
 The single linkage method (`method = "single"`) is related to the minimal spanning tree (MST) and adopts a 'friends of friends' grouping strategy. An edge-weighted graph is a graph where each edge has a weight (or cost). Here weights are space-time distances between tornadoes. A MST of an edge-weighted graph is a spanning tree whose weight (the sum of the weights of its edges) is no larger than the weight of any other spanning tree. A spanning tree of a graph on N vertices (tornado centroids) is a subset of N-1 edges that form a tree (Skiena 1990, p. 227).
  
 The `cutree()` function is used to extract a group number for each tornado. Tornadoes in each group are close in space & time. Here the tree is cut at a height of 50000 space-time units. Making `h` smaller results in smaller groups (fewer tornadoes per group).
-```{r, eval = FALSE}
+```{r}
 stime <- proc.time()
 tree <- hclust(dst, method = "single")
 groupNumber <- as.integer(cutree(tree, h = 50000))
@@ -126,52 +123,96 @@ proc.time() - stime
 ```
 
 Add the group number to each tornado. 
-```{r, eval = FALSE}
-Torn.sfT$groupNumber <- groupNumber
+```{r}
+All_Tornadoes$groupNumber <- groupNumber
 ```
 
-Create an ID for unique big days. It needs to have the group number and the cDate because there are multiple group numbers in each cDate. Similarly, there are multiple cDates in each groupnumber. An ID helps retrieve appropriate/unique big days. 
-```{r, eval = FALSE}
-Torn.sfT <- Torn.sfT %>%
-   mutate(ID = paste0(gsub("-", "", cDate), groupNumber))
-```
-
-Compute big day-level statistics. Keep only days with at least 10 tornadoes. 
-```{r, eval = FALSE}
-BigDays.sfdfT <- Torn.sfT %>%
-  group_by(ID, groupNumber, cDate) %>%
+Compute group-level statistics. 
+```{r}
+Groups.sfdfT <- All_Tornadoes %>%
+  group_by(groupNumber) %>%
   summarize(Year = first(Year),
             Month = first(mo),
-            casualties = sum(cas),
+            FirstDate = first(date),
+            LastDate = last(date),
+            Name = paste(FirstDate, "to", LastDate),
+            FirstcDate = first(cDate),
+            LastcDate = last(cDate),
+            ncD = n_distinct(cDate),
             nT = n(),
-            nT1_5 = sum(mag >= 1),
             n0 = sum(mag == 0),
             n1 = sum(mag == 1),
             n2 = sum(mag == 2),
             n3 = sum(mag == 3),
             n4 = sum(mag == 4),
             n5 = sum(mag == 5),
-            GroupTotalED = sum(ED),
-            GroupTotalEDinTW = paste(round(GroupTotalED/10^12), "TW"),
+            ATP = sum(ED),
+            ATP_TW = paste(round(ATP/10^12), "TW"),
             maxEF = max(mag),
-            startTime = first(DateTime),
-            middleTime = median(DateTime),
-            finishTime = last(DateTime),
-            Duration = difftime(finishTime, startTime, units = "secs")) %>%
-  filter(nT >= 10)
+            nD = n_distinct(date),
+            StartTime = first(DateTime),
+            EndTime = last(DateTime),
+            Duration = difftime(EndTime, StartTime, units = "secs"), 
+            cas = sum(inj + fat)) 
+```
+ 
+```{r, eval = FALSE}
+GroupTornadoes <- All_Tornadoes %>%
+  filter(groupNumber %in% Groups.sfdfT$groupNumber)
+```
+
+########################################
+## Extract Big Days from Large Groups ##
+########################################
+
+Filter individual tornadoes to remove those that are not part of a large group. Group by group number and convective dates. Remove days having fewer than 10 tornadoes.
+```{r, eval = FALSE}
+BigDays.sfdfT <- All_Tornadoes %>%
+  filter(groupNumber %in% Groups.sfdfT$groupNumber) %>%
+  group_by(groupNumber, cDate) %>%
+  summarize(nT = n(),
+            n0 = sum(mag == 0),
+            n1 = sum(mag == 1),
+            n2 = sum(mag == 2),
+            n3 = sum(mag == 3),
+            n4 = sum(mag == 4),
+            n5 = sum(mag == 5),
+            ATP = sum(ED),
+            maxATP = max(ED),
+            avgATP = mean(ED),
+            GroupDayCas = sum(cas),
+            GroupDayFat = sum(fat),
+            StartTime_CST = first(DateTime),
+            EndTime_CST= last(DateTime),
+            StartTime_UTC = StartTime_CST + 21600,
+            EndTime_UTC = EndTime_CST + 21600,
+            Duration = difftime(EndTime_CST, StartTime_CST, units = "secs")) %>%
+  filter(nT >= 10) %>%
+  mutate(Year = year(cDate),
+         Mo = month(cDate),
+         Month = format(cDate, "%m"), # this is needed to preserve the leading zeros
+         Day = format(cDate, "%d"), 
+         ATP_TW = ATP/10^12)                                                                                      
 dim(BigDays.sfdfT)
 ```
 
-Convert `middleTime` to UTC.
-```{r, eval = FALSE}
-attr(BigDays.sfdfT$startTime, "tzone") <- "UTC"
-attr(BigDays.sfdfT$middleTime, "tzone") <- "UTC"
-attr(BigDays.sfdfT$finishTime, "tzone") <- "UTC"
+Create a unique ID for each big day and each tornado. Extract the tornadoes associated with each big day using the unique ID.
+```{r}
+BigDayTornadoes <- All_Tornadoes %>%
+   mutate(ID = paste0(gsub("-", "", cDate), groupNumber))
+BigDays.sfdfT <- BigDays.sfdfT %>%
+   mutate(ID = paste0(gsub("-", "", cDate), groupNumber))
+
+BigDayTornadoes <- BigDayTornadoes %>%
+  filter(ID %in% BigDays.sfdfT$ID)
+
+sum(BigDays.sfdfT$nT)
 ```
 
 Round the UTC time to nearest 6 hours. This is done with the `align.time()` function from the **xts** package. Adjust it by 3 hours to get the closest time. This falls within the outbreak so you need to subtract by 3 hours (10800 seconds). This will produce the closest 3 hour NARR time that occurs before and not within the big day. 
-```{r, eval = FALSE}
-BigDays.sfdfT$NARRtime <- (align.time(BigDays.sfdfT$startTime, n = (60 * 60 * 3)) - 3600 * 3)
+```{r}
+BigDays.sfdfT$StartTime_UTC <- force_tz(BigDays.sfdfT$StartTime_UTC, tzone = "UTC")
+BigDays.sfdfT$NARRtime <- (align.time(BigDays.sfdfT$StartTime_UTC, n = (60 * 60 * 3)) - 3600 * 3)
 ```
 
 
@@ -203,7 +244,7 @@ Extract a vector of the big days. Save as a .csv for NARR download.
 bigdays <- BigDays.sfdfT$NARRday
 bigdaytimes <- BigDays.sfdfT$NARRZtime
 x <- cbind(as.character(bigdays), as.character(bigdaytimes))
-#write.csv(x, "BigDays.csv")
+write.csv(x, "BigDays.csv")
 ```
 
 ```{r, eval = FALSE}
@@ -221,51 +262,33 @@ BigDays.sfdfT <- st_transform(BigDays.sfdfT,
 
 Get the centroid (central point of the tornado activity) for each big day. 
 ```{r, eval = FALSE}
-BigDayCentroids.sfdfT <- st_centroid(BigDays.sfdfT)
-BigDayCentroids.sfdfT$groupArea <- st_area(st_convex_hull(BigDays.sfdfT))
-BigDayCentroids.sfdfT$groupDensity <- BigDayCentroids.sfdfT$nT/BigDayCentroids.sfdfT$groupArea
+BigDayCentroids.df <- st_centroid(BigDays.sfdfT)
+BigDayCentroids.df$groupArea <- st_area(st_convex_hull(BigDays.sfdfT))
+BigDayCentroids.df$groupDensity <- BigDayCentroids.df$nT/BigDayCentroids.df$groupArea
 ```
 
-Save the Big Days to a file `BigDays.RData`.
-```{r, eval = FALSE}
-#save(BigDays.sfdfT, file = "BigDays.RData")
-#load("BigDays.RData")
-dim(BigDays.sfdfT)
-```
+## Download NARR data: 
 
-Pull out the individual tornadoes associated with each Big Day. 
-```{r, eval = FALSE}
-groups <- BigDays.sfdfT$ID
-Torn.sfT <- Torn.sfT %>%
-  filter(ID %in% groups) 
-```
-
-################
-## Data Check ##
-################
-
-## NARR data: 
 Data is downloaded from NCAR's North American Regional Reanalysis (https://rda.ucar.edu/datasets/ds608.0/#!access). It extends from 1-1-1979 to 11-1-2018. Use the NCAR NARR 3-hourly files.  
 
 Spatial Extent: 
 Longitude Range: Westernmost = 148.64E Easternmost = 2.568W
-Latitude Range: Southernmost = 0.897N Northernmost = 85.333N 
+Latitude Range: Southernmost = 0.897N Northernmost = 85.333N
 
-```{r, eval = FALSE}
+```{r}
 BigDays.sfdfT <- st_transform(BigDays.sfdfT, 
   crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
 ```
 
-The list of all variables can be found here: http://www.emc.ncep.noaa.gov/mmb/rreanl/merged_land_AWIP32.pBigDays.sfdfT 
+The list of all variables can be found here: http://www.emc.ncep.noaa.gov/mmb/rreanl/merged_land_AWIP32.pdf 
 
-```{r, eval = FALSE}
+```{r}
 slug <- BigDays.sfdfT$slug
 slug2 <- BigDays.sfdfT$slug2
 ```
 
-
-Read the grib files as raster bricks and assign the CAPE and helicity variables to separate raster layers. Extract the average (and extreme) environmental values within each of the big days in large groups hulls. 
-```{r, eval = FALSE}
+Read the grib files as raster bricks and assign the CAPE and helicity variables to separate raster layers. Extract the average (and extreme) environmental values within each of the big days in large groups hulls.
+```{r}
 avgCAPE <- numeric()
 avgHLCY <- numeric()
 avgCIN <- numeric()
@@ -282,7 +305,6 @@ maxVSTM <- numeric()
 maxBS <- numeric()
 maxSM <- numeric()
  
-library(raster)
 for(i in 1:length(slug)){
   print(i)
   rb <- brick(paste0("/Volumes/Zoe's Home/NCARNARR/All/", BigDays.sfdfT$slug2[i], "/",BigDays.sfdfT$slug[i])) #<-- this is for varying NARR times
@@ -317,7 +339,7 @@ for(i in 1:length(slug)){
 ```
 
 Add environmental data values to the group day means data frame.
-```{r, eval = FALSE}
+```{r}
 BigDays.sfdfT$avgCAPE <- avgCAPE
 BigDays.sfdfT$avgHLCY <- avgHLCY
 BigDays.sfdfT$avgCIN <- avgCIN
@@ -336,7 +358,7 @@ BigDays.sfdfT$maxSM <- maxSM
 ```
 
 Scale the variables to make them easier to read and input for models. 
-```{r, eval = FALSE}
+```{r}
 BigDays.sfdfT$avgCAPE2 <- BigDays.sfdfT$avgCAPE/1000
 BigDays.sfdfT$avgHLCY2 <- BigDays.sfdfT$avgHLCY/100
 BigDays.sfdfT$avgCIN2 <- BigDays.sfdfT$avgCIN/100
@@ -354,12 +376,6 @@ BigDays.sfdfT$maxVSTM2 <- BigDays.sfdfT$maxVSTM/10
 BigDays.sfdfT$maxSM2 <- BigDays.sfdfT$maxSM/10
 ```
 
-```{r, eval = FALSE}
-#save(BigDays.sfdfT, file = "BigDays.RData")
-#load("BigDays.RData")
-dim(BigDays.sfdfT)
-```
-
 ########################
 ## Population Density ##
 ########################
@@ -367,14 +383,14 @@ dim(BigDays.sfdfT)
 You need to establish a population density for each big day. Round the year to the nearest 10. Example: 1995 should round to 2000 census and 1993 should round to 1990 census. 
 
 Create a function to round to the nearest 5 since we can get population for every 5 years starting 1995 - 2015. 
-```{r, eval = FALSE}
+```{r}
 mround <- function(x,base){ 
         base*round(x/base) 
 } 
 ```
 
 Add a new column `PopDensyear` to the dataset. This will round each year to the nearest 5th year. 
-```{r, eval = FALSE}
+```{r}
 BigDays.sfdfT <- BigDays.sfdfT %>%
   mutate(PopDensyear = mround(Year, 5))
 ```
@@ -386,36 +402,36 @@ Begin with The Gridded Population of the World Volume 3 data (2000). Begin with 
 Population Data for 2000 through 2015 are obtained from the Gridded Population of the World, version four (GPW, v4) from the Socioeconomic Data and Applications Center at Columbia University, USA. The database contain decennial census density estimates for 2000, 2005, 2010, and 2015 represented as people per square kilometer. Densities are based on residential population. 
 
 Load the population raster(s) and crop to defined extent. 
-```{r, eval = FALSE}
+```{r}
 #1995 Data: 
-  rb <- raster("/Volumes/Zoe's Drive/PhD_Program/Projects/Pred-casualties/PopDens/usadens/usads95g/w001001.adf")
+  rb <- raster("/Volumes/Zoe's Home/PhD_Program/Projects/PopDens/usadens/usads95g/w001001.adf")
   ext = raster::extent(c(-125, -67, 24, 50))
   PopDens = crop(rb, ext)
   PopDens1995 = projectRaster(PopDens, crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
 #2000 Data: 
-  rb <- raster(paste0("/Volumes/Zoe's Drive/PhD_Program/Projects/Pred-casualties/PopDens", "/gpw-v4-population-density-rev10_2000_2pt5_min_tif/gpw_v4_population_density_rev10_2000_2pt5_min.tif"))
+  rb <- raster(paste0("/Volumes/Zoe's Home/PhD_Program/Projects/PopDens", "/gpw-v4-population-density-rev11_2000_2pt5_min_tif/gpw_v4_population_density_rev11_2000_2pt5_min.tif"))
   ext = raster::extent(c(-125, -67, 24, 50))
   PopDens = crop(rb, ext)
   PopDens2000 = projectRaster(PopDens, crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
 #2005 Data: 
-    rb <- raster(paste0("/Volumes/Zoe's Drive/PhD_Program/Projects/Pred-casualties/PopDens", "/gpw-v4-population-density-rev10_2005_2pt5_min_tif/gpw_v4_population_density_rev10_2005_2pt5_min.tif"))
+    rb <- raster(paste0("/Volumes/Zoe's Home/PhD_Program/Projects/PopDens", "/gpw-v4-population-density-rev11_2005_2pt5_min_tif/gpw_v4_population_density_rev11_2005_2pt5_min.tif"))
   ext = raster::extent(c(-125, -67, 24, 50))
   PopDens = crop(rb, ext)
   PopDens2005 = projectRaster(PopDens, crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
 #2010 Data: 
-    rb <- raster(paste0("/Volumes/Zoe's Drive/PhD_Program/Projects/Pred-casualties/PopDens", "/gpw-v4-population-density-rev10_2010_2pt5_min_tif/gpw_v4_population_density_rev10_2010_2pt5_min.tif"))
+    rb <- raster(paste0("/Volumes/Zoe's Home/PhD_Program/Projects/PopDens", "/gpw-v4-population-density-rev11_2010_2pt5_min_tif/gpw_v4_population_density_rev11_2010_2pt5_min.tif"))
   ext = raster::extent(c(-125, -67, 24, 50))
   PopDens = crop(rb, ext)
   PopDens2010 = projectRaster(PopDens, crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
 #2015 Data: 
-    rb <- raster(paste0("/Volumes/Zoe's Drive/PhD_Program/Projects/Pred-casualties/PopDens", "/gpw-v4-population-density-rev10_2015_2pt5_min_tif/gpw_v4_population_density_rev10_2015_2pt5_min.tif"))
+    rb <- raster(paste0("/Volumes/Zoe's Home/PhD_Program/Projects/PopDens", "/gpw-v4-population-density-rev11_2015_2pt5_min_tif/gpw_v4_population_density_rev11_2015_2pt5_min.tif"))
   ext = raster::extent(c(-125, -67, 24, 50))
   PopDens = crop(rb, ext)
   PopDens2015 = projectRaster(PopDens, crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
 ```
 
 Use the `extract` function to obtain the population density.
-```{r, eval = FALSE}
+```{r}
 avgPopDens <- numeric()
 maxPopDens <- numeric()
 totalPopDens <- numeric()
@@ -446,14 +462,9 @@ for(i in 1:dim(BigDays.sfdfT)[1]){
   }
 }
 ```
-
-max(BigDays.sfdfT$avgPopDens) = 333.7982
-min(BigDays.sfdfT$avgPopDens) = 0.7072632
-max(BigDays.sfdfT$maxPopDens) = 12509.19
-min(BigDays.sfdfT$maxPopDens) = 1.506823 
  
 Add the max and avg population density values to the Big Day data: 
-```{r, eval = FALSE}
+```{r}
 BigDays.sfdfT <- cbind(BigDays.sfdfT, avgPopDens) 
 BigDays.sfdfT <- cbind(BigDays.sfdfT, maxPopDens) 
 BigDays.sfdfT <- cbind(BigDays.sfdfT, totalPopDens) 
@@ -461,7 +472,7 @@ BigDays.sfdfT <- cbind(BigDays.sfdfT, totalPopDens)
 
 Save the data. 
 ```{r}
-#save(BigDays.sfdfT, Torn.sfT, file = "BigDays.RData")
-#load("BigDays.RData")
+save(BigDays.sfdfT, All_Tornadoes, BigDayTornadoes, file = "BigDays.RData")
+load("BigDays.RData")
 dim(BigDays.sfdfT)
 ```
