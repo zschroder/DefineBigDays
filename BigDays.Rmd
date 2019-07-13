@@ -192,7 +192,7 @@ BigDays.sfdfT <- All_Tornadoes %>%
          Mo = month(cDate),
          Month = format(cDate, "%m"), # this is needed to preserve the leading zeros
          Day = format(cDate, "%d"), 
-         ATP_TW = ATP/10^12)                                                                                      
+         ATP_TW = ATP/10^12)                                                                              
 dim(BigDays.sfdfT)
 ```
 
@@ -472,7 +472,7 @@ BigDays.sfdfT <- cbind(BigDays.sfdfT, totalPopDens)
 
 Save the data. 
 ```{r}
-save(BigDays.sfdfT, All_Tornadoes, BigDayTornadoes, file = "BigDays.RData")
+#save(BigDays.sfdfT, All_Tornadoes, BigDayTornadoes, file = "BigDays.RData")
 load("BigDays.RData")
 dim(BigDays.sfdfT)
 ```
