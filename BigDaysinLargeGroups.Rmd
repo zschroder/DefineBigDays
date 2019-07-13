@@ -486,7 +486,7 @@ BigDays.sfdfT <- cbind(BigDays.sfdfT, totalPopDens)
 
 Save `BigDays.sfdfT` so we can work on the models below without needing to run all the code above.
 ```{r}
-save(BigDays.sfdfT, BigDayTornadoes, Groups.sfdfT, GroupTornadoes, All_Tornadoes, file = "BigDaysinLargeGroups.RData")
+#save(BigDays.sfdfT, BigDayTornadoes, Groups.sfdfT, GroupTornadoes, All_Tornadoes, file = "BigDaysinLargeGroups.RData")
 load("BigDaysinLargeGroups.RData")
 dim(BigDays.sfdfT)
 ```
