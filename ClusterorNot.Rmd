@@ -15,6 +15,7 @@ suppressMessages(library(rgeos))
 suppressMessages(library(dplyr))
 suppressMessages(library(ggplot2))
 suppressMessages(library(raster))
+suppressMessages(library(xts))
 suppressMessages(library(lubridate))
 ```
 
@@ -118,25 +119,28 @@ x <- Torn.sf %>%
             GroupTotalEDinTW = paste(round(GroupTotalED/10^12), "TW"),
             maxEF = max(mag),
             nD = n_distinct(date),
-            startTime = first(DateTime),
-            middleTime = median(DateTime),
-            finishTime = last(DateTime),
-            Duration = difftime(finishTime, startTime, units = "secs")) %>%
+            startTime_CST = first(DateTime),
+            middleTime_CST = median(DateTime),
+            finishTime_CST = last(DateTime),
+            startTime_UTC = as.POSIXct(startTime_CST + 21600),
+            middleTime_UTC = as.POSIXct(middleTime_CST + 21600),
+            finishTime_UTC = as.POSIXct(finishTime_CST + 21600),
+            Duration = difftime(finishTime_CST, startTime_CST, units = "secs")) %>%
   filter(nT >= 10)
 dim(x)
 ```
 
 
-Convert `middleTime` to UTC.
 ```{r}
-attr(x$middleTime, "tzone") <- "UTC"
-head(x$middleTime)
+x$startTime_UTC <- force_tz(as.POSIXct(x$startTime_UTC), tzone = "UTC")
+x$NARRtime <- (align.time(x$startTime_UTC, n = (60 * 60 * 3)) - 3600 * 3)
 ```
 
-Round the UTC time to nearest 6 hours. This is done with the `align.time()` function from the **xts** package.
-```{r}
-library(xts)
-x$NARRtime <- align.time(x$middleTime, n = 60 * 60 * 3)
+```{r, eval = FALSE}
+NARRday = format(as.POSIXct(strptime(x$NARRtime,"%Y-%m-%d %H:%M:%S",tz="")) ,format = "%Y/%m/%d")
+NARRZtime = format(as.POSIXct(strptime(x$NARRtime,"%Y-%m-%d %H:%M:%S",tz="")) ,format = "%H")
+
+x <- cbind(x, NARRday, NARRZtime)
 ```
 
 
@@ -183,29 +187,25 @@ tornx <- Torn.sf %>%
 
 ```{r}
 a <- x %>%
-  filter(cDate == "2004-06-23")
+  filter(cDate == "1994-06-26")
 a1 <- tornx %>%
-  filter(cDate == "2004-06-23")
+  filter(cDate == "1994-06-26")
 
 b <- x %>%
-  filter(cDate == "2005-06-23")
+  filter(cDate == "2007-03-23")
 b1 <- tornx %>%
-  filter(cDate == "2005-06-23")
+  filter(cDate == "2007-03-23")
 
 c <- x %>%
-  filter(cDate == "2004-05-27")
+  filter(cDate == "2011-06-18")
 c1 <- tornx %>%
-  filter(cDate == "2004-05-27")
+  filter(cDate == "2011-06-18")
 
 d <- x %>%
-  filter(cDate == "1994-04-26")
+  filter(cDate == "2017-11-18")
 d1 <- tornx %>%
-  filter(cDate == "1994-04-26")
+  filter(cDate == "2017-11-18")
 
-e <- x %>%
-  filter(cDate == "2003-05-26")
-e1 <- tornx %>%
-  filter(cDate == "1994-04-26")
 ```
 
 ```{r}
@@ -254,7 +254,6 @@ tm_shape(d1) +
 Load the Big Day data that is clustered. 
 ```{r}
 load("BigDays.RData")
-load("BigDayTornadoes.RData")
 ```
 
 ```{r}
@@ -274,28 +273,28 @@ BigDays.sfdfT <- st_transform(BigDays.sfdfT,
 Extract big days to match the unclustered big days. 
 ```{r}
 w <- BigDays.sfdfT %>%
-  filter(ID == "200406233318")
-w1 <- Torn.sfT %>%
-  filter(groupNumber == "3318",
-         cDate == "2004-06-23")
+  filter(ID == "19940626165")
+w1 <- BigDayTornadoes %>%
+  filter(groupNumber == "165",
+         cDate == "1994-06-26")
 
-x <- BigDays.sfdfT %>%
-  filter(ID == "200506233651")
-x1 <- Torn.sfT %>%
-  filter(groupNumber == "3651",
-         cDate == "2005-06-23")
+xx <- BigDays.sfdfT %>%
+  filter(ID == "200703233639")
+x1 <- BigDayTornadoes %>%
+  filter(groupNumber == "3639",
+         cDate == "2007-03-23")
 
 y <- BigDays.sfdfT %>%
-  filter(ID == "200405273249")
-y1 <- Torn.sfT %>%
-  filter(groupNumber == "3249",
-         cDate == "2004-05-27")
+  filter(ID == "201106184691")
+y1 <- BigDayTornadoes %>%
+  filter(groupNumber == "4691",
+         cDate == "2011-06-18")
 
 z <- BigDays.sfdfT %>%
-  filter(ID == "1994042658")
-z1 <- Torn.sfT %>%
-  filter(groupNumber == "58",
-         cDate == "1994-04-26")
+  filter(ID == "201711186152")
+z1 <- BigDayTornadoes %>%
+  filter(groupNumber == "6152",
+         cDate == "2017-11-18")
 ```
 
 
@@ -310,7 +309,7 @@ tm_shape(w1) +
              title.size = "Count", 
              legend.size.is.portrait = FALSE) 
 
-tm_shape(x) +
+tm_shape(xx) +
   tm_polygons(alpha = .1) + 
 tm_shape(stateBorders) + 
   tm_borders(col = "gray15", alpha = 1) +
@@ -343,7 +342,7 @@ tm_shape(z1) +
 
 ```{r}
 unclus <- rbind(a,b,c,d)
-clus <- rbind(w,x,y,z)
+clus <- rbind(w,xx,y,z)
 ```
 
 
@@ -359,16 +358,14 @@ The list of all variables can be found here: http://www.emc.ncep.noaa.gov/mmb/rr
 Create a downloadable string of information  
 ```{r}
 clus <- clus %>%
-  mutate(YrMoDa = gsub("-", "", cDate),
-         ztime = 18,
-         slug = paste0("merged_AWIP32.",YrMoDa, ztime))
-clusslug <- clus$slug
+  mutate(YrMoDa = gsub("/", "", NARRday),
+         slug = paste0("merged_AWIP32.",YrMoDa, NARRZtime),
+         slug2 = paste0("merged_AWIP32.",YrMoDa))
 
 unclus <- unclus %>%
-  mutate(YrMoDa = gsub("-", "", cDate),
-         ztime = 18,
-         slug = paste0("merged_AWIP32.",YrMoDa, ztime))
-unclusslug <- unclus$slug
+  mutate(YrMoDa = gsub("/", "", NARRday),
+         slug = paste0("merged_AWIP32.",YrMoDa, NARRZtime),
+         slug2 = paste0("merged_AWIP32.",YrMoDa))
 ```
 
 Read the grib files as raster bricks and assign the CAPE and helicity variables to separate raster layers. Extract the average (and extreme) environmental values within each of the big days in large groups hulls. 
@@ -391,7 +388,7 @@ library(raster)
 for(i in 1:length(clusslug)){
   print(i)
   #rb <- brick(paste0("/Volumes/My Passport for Mac/NCARNARR/All/", BigDays.sfdfT$slug2[i], "/",BigDays.sfdfT$slug[i])) <-- this is for varying NARR times
-   rb <- brick(paste0("/Volumes/My Passport for Mac/PhD_Program/NCARNARR/Files/18Z/", clus$slug[i]))
+   rb <- brick(paste0("/Volumes/Zoe's Home/NCARNARR/All/", clus$slug2[i], "/", clus$slug[i])) 
   CAPE.rl <- raster(rb, layer = 375)
   HLCY.rl <- raster(rb, layer = 323)
   CIN.rl <- raster(rb, layer = 376)
@@ -483,25 +480,6 @@ tm_shape(w1) +
              legend.size.is.portrait = FALSE)
 
 ```
-Cluster: 
-aCAPE: 644.4
-aHLCY: 238.67
-aCIN: -37.63
-aBS: 17.51
-mCAPE: 1420
-mHLCY: 263.3
-mCIN: -83.1
-mBS: 19.79
-
-Uncluster: 
-aCAPE: 246.21
-aHLCY: 70.4
-aCIN: -30.74
-aBS: 12.53
-mCAPE: 2170
-mHLCY: 263.3
-mCIN: -271.1
-mBS: 26.87
 
 ####################
 ## June 23, 2005: ##
@@ -530,26 +508,6 @@ tm_shape(x1) +
 
 ```
 
-Cluster: 
-aCAPE: 4816
-aHLCY: 116.71
-aCIN: -80.14
-aBS: 9.38
-mCAPE: 5320 
-mHLCY: 134.74
-mCIN: -160.86 
-mBS: 10.34
-
-Uncluster: 
-aCAPE: 1022.5
-aHLCY: 39.96
-aCIN: -85.3
-aBS: 9.26
-mCAPE: 5320
-mHLCY: 184.74
-mCIN: -355.86
-mBS: 20.8
-
 ###################
 ## May 27, 2004: ##
 ###################
@@ -577,25 +535,6 @@ tm_shape(y1) +
              legend.size.is.portrait = FALSE)
 
 ```
-Cluster: 
-aCAPE: 2465.5
-aHLCY: 125.3
-aCIN: -4.53
-aBS: 16.2
-mCAPE: 3500
-mHLCY: 155
-mCIN: -14.2
-mBS: 18.1
-
-Uncluster: 
-aCAPE: 687.2
-aHLCY: 80.8
-aCIN: -33.36
-aBS: 14.8
-mCAPE: 3500
-mHLCY: 341.6
-mCIN: -214.2
-mBS: 21.1
 
 #####################
 ## April 26, 1994: ##
@@ -624,25 +563,7 @@ tm_shape(z1) +
              legend.size.is.portrait = FALSE)
 
 ```
-Cluster: 
-aCAPE: 2967.8
-aHLCY: 128,9
-aCIN: -6.8
-aBS: 15.1
-mCAPE: 4970
-mHLCY: 199.1
-mCIN: -52.2
-mBS: 24.1
 
-Uncluster: 
-aCAPE: 1259.4
-aHLCY: 104.5
-aCIN: -5.98
-aBS: 17.4
-mCAPE: 4970
-mHLCY: 244.1
-mCIN: -86.24
-mBS: 37.4
 
 ** WRITE SOMETHING ABOUT THE NEED FOR CLUSTERING **
 
