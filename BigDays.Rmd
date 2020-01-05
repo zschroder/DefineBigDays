@@ -547,7 +547,7 @@ sum(is.na(BigDays.sfdfT$minLCL))
 
 Save the data. 
 ```{r}
-#save(BigDays.sfdfT, All_Tornadoes, BigDayTornadoes, file = "BigDays2.RData")
-load("BigDays2.RData")
+#save(BigDays.sfdfT, All_Tornadoes, BigDayTornadoes, file = "BigDays.RData")
+load("BigDays.RData")
 dim(BigDays.sfdfT)
 ```
