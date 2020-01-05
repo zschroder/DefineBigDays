@@ -525,9 +525,10 @@ for(i in 1:dim(BigDays.sfdfT)[1]){
     dayPOP <- sum(popinhull$population)
     totalPOP <- append(totalPOP, dayPOP)
 }
+BigDays.sfdfT <- cbind(BigDays.sfdfT, totalPOP)
 ```
 
-```{r}
+```{r, eval = FALSE}
 tester <- BigDays.sfdfT[1,]
 
 BigDays.sfdfT <- BigDays.sfdfT %>%
