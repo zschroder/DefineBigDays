@@ -5,6 +5,8 @@ date: "4/11/2019"
 output: html_document
 ---
 
+# Updated to include all 2018 tornadoes on January 4th, 2020. 
+
 ## Part 1: Tornado data
 
 Load packages and suppress the messages of the packages. 
@@ -33,7 +35,7 @@ suppressMessages(library(gridExtra))
 
 The newest GIS shapefile contains missing geometries for more than 30% of the tornadoes. The number of missing geometries is highest after 1995. Instead here we use the csv file from https://www.spc.noaa.gov/wcm/#data  Use the start lon/lat and create a `sp` object then convert to `sf`. Set the coordinate reference system (crs) to ESPG 4326.
 ```{r}
-Tor.spdf <- read.csv(file = "1950-2017_actual_tornadoes.csv")
+Tor.spdf <- read.csv(file = "1950-2018_actual_tornadoes.csv")
 sp::coordinates(Tor.spdf) <- ~ slon + slat
 Tor.sfdf <- st_as_sf(Tor.spdf)
 st_crs(Tor.sfdf) <- 4326
@@ -51,7 +53,7 @@ All_Tornadoes <- Tor.sfdf %>%
 Add a data/time column also add columns for path length, width, and area in metric units. Leave the time zone as native CDT. Create a convective day (6AM to 6AM) column taking hours 00:00:00 -> 05:59:59 and assigning it to the previous date (this associates the previous day's date to tornadoes occurring up to 6 hours after local midnight).
 ```{r}
 All_Tornadoes <- All_Tornadoes %>%
-  mutate(dy = format(as.Date(date,format="%m/%d/%y"), "%d"),
+  mutate(#dy = format(as.Date(date,format="%y/%m/%d"), "%d"), #This is now an included column in data
          DateTime = as.POSIXct(paste(yr, mo, dy, time), format = "%Y%m%d%H:%M:%S"),
          Hour = hour(DateTime),
          Year = year(DateTime),
@@ -76,7 +78,7 @@ $$
 E = A_p \rho \sum_{j=0}^{J} w_j v_j^{3},
 $$
 where $A_p$ is the area of the path, $\rho$ is area density [1 kg/m^3]  $v_j$ is the midpoint wind speed for each rating, and $w_j$ is the corresponding fraction of path area by EF rating. With no upper bound on the EF5 wind speeds, the midpoint wind speed is set at 97 m~s$^{-1}$ (7.5 m~s$^{-1}$ above the threshold wind speed consistent with the EF4 midpoint speed relative to its threshold)
-```{r, eval = FALSE}
+```{r}
 perc <- c(1, 0, 0, 0, 0, 0, 
           .772, .228, 0, 0, 0, 0,
           .616, .268, .115, 0, 0, 0,
@@ -281,7 +283,6 @@ BigDays.sfdfT <- st_transform(BigDays.sfdfT,
 ```
 
 The list of all variables can be found here: http://www.emc.ncep.noaa.gov/mmb/rreanl/merged_land_AWIP32.pdf 
-
 ```{r}
 slug <- BigDays.sfdfT$slug
 slug2 <- BigDays.sfdfT$slug2
@@ -290,89 +291,112 @@ slug2 <- BigDays.sfdfT$slug2
 Read the grib files as raster bricks and assign the CAPE and helicity variables to separate raster layers. Extract the average (and extreme) environmental values within each of the big days in large groups hulls.
 ```{r}
 avgCAPE <- numeric()
+avgsbCAPE <- numeric()
 avgHLCY <- numeric()
 avgCIN <- numeric()
+avgsbCIN <- numeric()
 avgUSTM <- numeric()
 avgVSTM <- numeric()
 avgBS <- numeric()
 avgSM <- numeric()
 avgRATIO <- numeric()
+avgLCL <- numeric()
 maxCAPE <- numeric()
+maxsbCAPE <- numeric()
 maxHLCY <- numeric()
 minCIN <- numeric()
+minsbCIN <- numeric()
 maxUSTM <- numeric()
 maxVSTM <- numeric()
 maxBS <- numeric()
 maxSM <- numeric()
+maxLCL <- numeric()
+minLCL <- numeric()
  
 for(i in 1:length(slug)){
   print(i)
   rb <- brick(paste0("/Volumes/Zoe's Home/NCARNARR/All/", BigDays.sfdfT$slug2[i], "/",BigDays.sfdfT$slug[i])) #<-- this is for varying NARR times
   CAPE <- raster(rb, layer = 375)
+  sbCAPE <- raster(rb, layer = 315)
   HLCY <- raster(rb, layer = 323)
   CIN <- raster(rb, layer = 376)
+  sbCIN <- raster(rb, layer = 316)
   USTM <- raster(rb, layer = 324)
   VSTM <- raster(rb, layer = 325)
   UGRD500 <- raster(rb, layer = 117) 
   VGRD500 <- raster(rb, layer = 118) 
   UGRDsfc <- raster(rb, layer = 293) 
-  VGRDsfc <- raster(rb, layer = 294)     
+  VGRDsfc <- raster(rb, layer = 294)  
+  LCL <- raster(rb, layer = 319)
   SM <- sqrt(USTM^2 + VSTM^2)
   RATIO <- CAPE/abs(CIN)
   BS <- sqrt(((UGRD500 - UGRDsfc)**2) + ((VGRD500 - VGRDsfc)**2))
   avgCAPE <- c(avgCAPE, as.numeric(raster::extract(CAPE, BigDays.sfdfT[i, ], fun = mean)))
+  avgsbCAPE <- c(avgsbCAPE, as.numeric(raster::extract(sbCAPE, BigDays.sfdfT[i, ], fun = mean)))
+  maxCAPE <- c(maxCAPE, as.numeric(raster::extract(CAPE, BigDays.sfdfT[i, ], fun = max)))
+  maxsbCAPE <- c(maxsbCAPE, as.numeric(raster::extract(sbCAPE, BigDays.sfdfT[i, ], fun = max)))
   avgHLCY <- c(avgHLCY, as.numeric(raster::extract(HLCY, BigDays.sfdfT[i, ], fun = mean)))
+  maxHLCY <- c(maxHLCY, as.numeric(raster::extract(HLCY, BigDays.sfdfT[i, ], fun = max)))
   avgCIN <- c(avgCIN, as.numeric(raster::extract(CIN, BigDays.sfdfT[i, ], fun = mean)))
+  avgsbCIN <- c(avgsbCIN, as.numeric(raster::extract(sbCIN, BigDays.sfdfT[i, ], fun = mean)))
+  minCIN <- c(minCIN, as.numeric(raster::extract(CIN, BigDays.sfdfT[i, ], fun = min)))
+  minsbCIN <- c(minsbCIN, as.numeric(raster::extract(sbCIN, BigDays.sfdfT[i, ], fun = min)))
   avgUSTM <- c(avgUSTM, as.numeric(raster::extract(USTM, BigDays.sfdfT[i, ], fun = mean)))
+  maxUSTM <- c(maxUSTM, as.numeric(raster::extract(USTM, BigDays.sfdfT[i, ], fun = max)))
   avgVSTM <- c(avgVSTM, as.numeric(raster::extract(VSTM, BigDays.sfdfT[i, ], fun = mean)))
+  maxVSTM <- c(maxVSTM, as.numeric(raster::extract(VSTM, BigDays.sfdfT[i, ], fun = max)))
   avgSM <- c(avgSM, as.numeric(raster::extract(SM, BigDays.sfdfT[i, ], fun = mean)))
+  maxSM <- c(maxSM, as.numeric(raster::extract(SM, BigDays.sfdfT[i, ], fun = max)))
   avgRATIO <- c(avgRATIO, as.numeric(raster::extract(RATIO, BigDays.sfdfT[i, ], fun = mean)))
   avgBS <- c(avgBS, as.numeric(raster::extract(BS, BigDays.sfdfT[i, ], fun = mean)))
-  maxCAPE <- c(maxCAPE, as.numeric(raster::extract(CAPE, BigDays.sfdfT[i, ], fun = max)))
-  maxHLCY <- c(maxHLCY, as.numeric(raster::extract(HLCY, BigDays.sfdfT[i, ], fun = max)))
-  minCIN <- c(minCIN, as.numeric(raster::extract(CIN, BigDays.sfdfT[i, ], fun = min)))
-  maxUSTM <- c(maxUSTM, as.numeric(raster::extract(USTM, BigDays.sfdfT[i, ], fun = max)))
-  maxVSTM <- c(maxVSTM, as.numeric(raster::extract(VSTM, BigDays.sfdfT[i, ], fun = max)))
-  maxSM <- c(maxSM, as.numeric(raster::extract(SM, BigDays.sfdfT[i, ], fun = max)))
   maxBS <- c(maxBS, as.numeric(raster::extract(BS, BigDays.sfdfT[i, ], fun = max)))
+  avgLCL <- c(avgLCL, as.numeric(raster::extract(LCL, BigDays.sfdfT[i,], fun = mean)))
+  maxLCL <- c(maxLCL, as.numeric(raster::extract(LCL, BigDays.sfdfT[i,], fun = max)))
+  minLCL <- c(minLCL, as.numeric(raster::extract(LCL, BigDays.sfdfT[i,], fun = min)))
 }
 ```
 
 Add environmental data values to the group day means data frame.
 ```{r}
 BigDays.sfdfT$avgCAPE <- avgCAPE
+BigDays.sfdfT$avgsbCAPE <- avgsbCAPE
+BigDays.sfdfT$maxCAPE <- maxCAPE
+BigDays.sfdfT$maxsbCAPE <- maxsbCAPE
 BigDays.sfdfT$avgHLCY <- avgHLCY
+BigDays.sfdfT$maxHLCY <- maxHLCY
 BigDays.sfdfT$avgCIN <- avgCIN
+BigDays.sfdfT$avgsbCIN <- avgsbCIN
+BigDays.sfdfT$minCIN <- minCIN
+BigDays.sfdfT$minsbCIN <- minsbCIN
 BigDays.sfdfT$avgUSTM <- avgUSTM
+BigDays.sfdfT$maxUSTM <- maxUSTM
 BigDays.sfdfT$avgVSTM <- avgVSTM
+BigDays.sfdfT$maxVSTM <- maxVSTM
 BigDays.sfdfT$avgBS <- avgBS
+BigDays.sfdfT$maxBS <- maxBS
 BigDays.sfdfT$avgRATIO <- avgRATIO
 BigDays.sfdfT$avgSM <- avgSM
-BigDays.sfdfT$maxCAPE <- maxCAPE
-BigDays.sfdfT$maxHLCY <- maxHLCY
-BigDays.sfdfT$minCIN <- minCIN
-BigDays.sfdfT$maxUSTM <- maxUSTM
-BigDays.sfdfT$maxVSTM <- maxVSTM
-BigDays.sfdfT$maxBS <- maxBS
 BigDays.sfdfT$maxSM <- maxSM
+BigDays.sfdfT$minLCL <- minLCL
+BigDays.sfdfT$maxLCL <- maxLCL
+BigDays.sfdfT$svgLCL <- avgLCL
 ```
 
 Scale the variables to make them easier to read and input for models. 
 ```{r}
 BigDays.sfdfT$avgCAPE2 <- BigDays.sfdfT$avgCAPE/1000
-BigDays.sfdfT$avgHLCY2 <- BigDays.sfdfT$avgHLCY/100
-BigDays.sfdfT$avgCIN2 <- BigDays.sfdfT$avgCIN/100
-BigDays.sfdfT$avgBS2 <- BigDays.sfdfT$avgBS/10
-BigDays.sfdfT$avgUSTM2 <- BigDays.sfdfT$avgUSTM/10
-BigDays.sfdfT$avgVSTM2 <- BigDays.sfdfT$avgVSTM/10
-BigDays.sfdfT$avgSM2 <- BigDays.sfdfT$avgSM/10
-
 BigDays.sfdfT$maxCAPE2 <- BigDays.sfdfT$maxCAPE/1000
+BigDays.sfdfT$avgHLCY2 <- BigDays.sfdfT$avgHLCY/100
 BigDays.sfdfT$maxHLCY2 <- BigDays.sfdfT$maxHLCY/100
+BigDays.sfdfT$avgCIN2 <- BigDays.sfdfT$avgCIN/100
 BigDays.sfdfT$minCIN2 <- BigDays.sfdfT$minCIN/100
+BigDays.sfdfT$avgBS2 <- BigDays.sfdfT$avgBS/10
 BigDays.sfdfT$maxBS2 <- BigDays.sfdfT$maxBS/10
+BigDays.sfdfT$avgUSTM2 <- BigDays.sfdfT$avgUSTM/10
 BigDays.sfdfT$maxUSTM2 <- BigDays.sfdfT$maxUSTM/10
+BigDays.sfdfT$avgVSTM2 <- BigDays.sfdfT$avgVSTM/10
 BigDays.sfdfT$maxVSTM2 <- BigDays.sfdfT$maxVSTM/10
+BigDays.sfdfT$avgSM2 <- BigDays.sfdfT$avgSM/10
 BigDays.sfdfT$maxSM2 <- BigDays.sfdfT$maxSM/10
 ```
 
@@ -455,7 +479,7 @@ for(i in 1:dim(BigDays.sfdfT)[1]){
   avgPopDens <- c(avgPopDens, as.numeric(raster::extract(PopDens2010, BigDays.sfdfT[i,], fun = mean, na.rm = TRUE, weights = TRUE, normalizeWeights = FALSE)))
   maxPopDens <- c(maxPopDens, as.numeric(raster::extract(PopDens2010, BigDays.sfdfT[i,], fun = max, na.rm = TRUE)))
   totalPopDens <- c(totalPopDens, as.numeric(raster::extract(PopDens1995, BigDays.sfdfT[i, ], fun = sum, na.rm = TRUE))) 
-  } else if (BigDays.sfdfT$PopDensyear[i] == 2015){
+  } else if (BigDays.sfdfT$PopDensyear[i] >= 2015){
   avgPopDens <- c(avgPopDens, as.numeric(raster::extract(PopDens2015, BigDays.sfdfT[i,], fun = mean, na.rm = TRUE, weights = TRUE, normalizeWeights = FALSE)))
   maxPopDens <- c(maxPopDens, as.numeric(raster::extract(PopDens2015, BigDays.sfdfT[i,], fun = max, na.rm = TRUE)))
   totalPopDens <- c(totalPopDens, as.numeric(raster::extract(PopDens1995, BigDays.sfdfT[i, ], fun = sum, na.rm = TRUE))) 
@@ -470,9 +494,59 @@ BigDays.sfdfT <- cbind(BigDays.sfdfT, maxPopDens)
 BigDays.sfdfT <- cbind(BigDays.sfdfT, totalPopDens) 
 ```
 
+*Get the latitude and longitude for each big day centroid*
+```{r, eval = FALSE}
+BigDayCentroids.df <- st_centroid(BigDays.sfdfT)
+test <- as_Spatial(BigDayCentroids.df)
+spgeo <- spTransform(test, CRS("+proj=longlat +datum=WGS84"))
+test <- st_as_sf(spgeo)
+coords <- as.data.frame(st_coordinates(test))
+colnames(coords)[colnames(coords)=="X"] <- "Lon"
+colnames(coords)[colnames(coords)=="Y"] <- "Lat"
+
+BigDays.sfdfT <- cbind(as.data.frame(BigDays.sfdfT), as.data.frame(coords))
+```
+
+*Get the total population from the cities that fall within each big day*
+```{r, eval = FALSE}
+cities <- us_cities()
+BigDays.sfdfT <- st_as_sf(BigDays.sfdfT)
+
+BigDays.sfdfT <- st_convex_hull(BigDays.sfdfT)
+BigDays.sfdfT <- st_transform(BigDays.sfdfT, 
+  crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
+cities <- st_transform(cities, 
+  crs = "+proj=lcc +lat_1=50 +lat_2=50 +lat_0=50 +lon_0=-107 +x_0=0 +y_0=0 +a=6371200 +b=6371200 +units=m +no_defs")
+
+totalPOP <- numeric()
+
+for(i in 1:dim(BigDays.sfdfT)[1]){
+    popinhull <- cities[BigDays.sfdfT[i,],]
+    dayPOP <- sum(popinhull$population)
+    totalPOP <- append(totalPOP, dayPOP)
+}
+```
+
+```{r}
+tester <- BigDays.sfdfT[1,]
+
+BigDays.sfdfT <- BigDays.sfdfT %>%
+  mutate(STPLCL = ifelse(minLCL <= 1000, 1, ifelse(minLCL >= 2000, 0, minLCL)),
+         STPBWD = ifelse(maxBS >= 30, 1.5, ifelse(maxBS < 12.5, 0, maxBS)), 
+         STPCIN = ifelse(minCIN >= -50, 1, ifelse(minCIN <= -200, 0, minCIN)))
+
+STP <- ((BigDays.sfdfT$maxsbCAPE)/1500) * 
+       ((2000 - BigDays.sfdfT$STPLCL)/1000) * 
+       ((BigDays.sfdfT$maxHLCY)/150) * 
+       ((BigDays.sfdfT$STPBWD)/20) * 
+       ((200 + BigDays.sfdfT$STPCIN)/150)
+
+sum(is.na(BigDays.sfdfT$minLCL))
+```
+
 Save the data. 
 ```{r}
-#save(BigDays.sfdfT, All_Tornadoes, BigDayTornadoes, file = "BigDays.RData")
-load("BigDays.RData")
+#save(BigDays.sfdfT, All_Tornadoes, BigDayTornadoes, file = "BigDays2.RData")
+load("BigDays2.RData")
 dim(BigDays.sfdfT)
 ```
