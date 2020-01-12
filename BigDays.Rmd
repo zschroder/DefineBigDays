@@ -168,7 +168,7 @@ GroupTornadoes <- All_Tornadoes %>%
 ########################################
 
 Filter individual tornadoes to remove those that are not part of a large group. Group by group number and convective dates. Remove days having fewer than 10 tornadoes.
-```{r, eval = FALSE}
+```{r}
 BigDays.sfdfT <- All_Tornadoes %>%
   filter(groupNumber %in% Groups.sfdfT$groupNumber) %>%
   group_by(groupNumber, cDate) %>%
@@ -292,6 +292,8 @@ Read the grib files as raster bricks and assign the CAPE and helicity variables 
 ```{r}
 avgCAPE <- numeric()
 avgsbCAPE <- numeric()
+avgDEW <- numeric()
+avgMR <- numeric()
 avgHLCY <- numeric()
 avgCIN <- numeric()
 avgsbCIN <- numeric()
@@ -303,6 +305,8 @@ avgRATIO <- numeric()
 avgLCL <- numeric()
 maxCAPE <- numeric()
 maxsbCAPE <- numeric()
+maxDEW <- numeric()
+maxMR <- numeric()
 maxHLCY <- numeric()
 minCIN <- numeric()
 minsbCIN <- numeric()
@@ -318,6 +322,8 @@ for(i in 1:length(slug)){
   rb <- brick(paste0("/Volumes/Zoe's Home/NCARNARR/All/", BigDays.sfdfT$slug2[i], "/",BigDays.sfdfT$slug[i])) #<-- this is for varying NARR times
   CAPE <- raster(rb, layer = 375)
   sbCAPE <- raster(rb, layer = 315)
+  DEW <- raster(rb, layer = 290)
+  MR <- raster(rb, layer = 289)
   HLCY <- raster(rb, layer = 323)
   CIN <- raster(rb, layer = 376)
   sbCIN <- raster(rb, layer = 316)
@@ -335,6 +341,10 @@ for(i in 1:length(slug)){
   avgsbCAPE <- c(avgsbCAPE, as.numeric(raster::extract(sbCAPE, BigDays.sfdfT[i, ], fun = mean)))
   maxCAPE <- c(maxCAPE, as.numeric(raster::extract(CAPE, BigDays.sfdfT[i, ], fun = max)))
   maxsbCAPE <- c(maxsbCAPE, as.numeric(raster::extract(sbCAPE, BigDays.sfdfT[i, ], fun = max)))
+  avgDEW <- c(avgDEW, as.numeric(raster::extract(DEW, BigDays.sfdfT[i, ], fun = mean)))
+  maxDEW <- c(maxDEW, as.numeric(raster::extract(DEW, BigDays.sfdfT[i, ], fun = max)))
+  avgMR <- c(avgMR, as.numeric(raster::extract(MR, BigDays.sfdfT[i, ], fun = mean)))
+  maxMR <- c(maxMR, as.numeric(raster::extract(MR, BigDays.sfdfT[i, ], fun = max)))
   avgHLCY <- c(avgHLCY, as.numeric(raster::extract(HLCY, BigDays.sfdfT[i, ], fun = mean)))
   maxHLCY <- c(maxHLCY, as.numeric(raster::extract(HLCY, BigDays.sfdfT[i, ], fun = max)))
   avgCIN <- c(avgCIN, as.numeric(raster::extract(CIN, BigDays.sfdfT[i, ], fun = mean)))
@@ -362,6 +372,10 @@ BigDays.sfdfT$avgCAPE <- avgCAPE
 BigDays.sfdfT$avgsbCAPE <- avgsbCAPE
 BigDays.sfdfT$maxCAPE <- maxCAPE
 BigDays.sfdfT$maxsbCAPE <- maxsbCAPE
+BigDays.sfdfT$avgDEW <- avgDEW
+BigDays.sfdfT$maxDEW <- maxDEW
+BigDays.sfdfT$avgMR <- avgMR
+BigDays.sfdfT$maxMR <- maxMR
 BigDays.sfdfT$avgHLCY <- avgHLCY
 BigDays.sfdfT$maxHLCY <- maxHLCY
 BigDays.sfdfT$avgCIN <- avgCIN
@@ -495,7 +509,7 @@ BigDays.sfdfT <- cbind(BigDays.sfdfT, totalPopDens)
 ```
 
 *Get the latitude and longitude for each big day centroid*
-```{r, eval = FALSE}
+```{r}
 BigDayCentroids.df <- st_centroid(BigDays.sfdfT)
 test <- as_Spatial(BigDayCentroids.df)
 spgeo <- spTransform(test, CRS("+proj=longlat +datum=WGS84"))
@@ -508,7 +522,7 @@ BigDays.sfdfT <- cbind(as.data.frame(BigDays.sfdfT), as.data.frame(coords))
 ```
 
 *Get the total population from the cities that fall within each big day*
-```{r, eval = FALSE}
+```{r}
 cities <- us_cities()
 BigDays.sfdfT <- st_as_sf(BigDays.sfdfT)
 
@@ -546,8 +560,8 @@ sum(is.na(BigDays.sfdfT$minLCL))
 ```
 
 Save the data. 
-```{r}
-#save(BigDays.sfdfT, All_Tornadoes, BigDayTornadoes, file = "BigDays.RData")
-load("BigDays.RData")
+```{r, eval=FALSE}
+save(BigDays.sfdfT, All_Tornadoes, BigDayTornadoes, file = "BigDays.RData")
+#load("BigDays.RData")
 dim(BigDays.sfdfT)
 ```
