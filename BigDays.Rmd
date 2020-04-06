@@ -299,7 +299,8 @@ avgCIN <- numeric()
 avgsbCIN <- numeric()
 avgUSTM <- numeric()
 avgVSTM <- numeric()
-avgBS <- numeric()
+avgBS_deep <- numeric()
+avgBS_shallow <- numeric()
 avgSM <- numeric()
 avgRATIO <- numeric()
 avgLCL <- numeric()
@@ -312,12 +313,13 @@ minCIN <- numeric()
 minsbCIN <- numeric()
 maxUSTM <- numeric()
 maxVSTM <- numeric()
-maxBS <- numeric()
+maxBS_deep <- numeric()
+maxBS_shallow <- numeric()
 maxSM <- numeric()
 maxLCL <- numeric()
 minLCL <- numeric()
  
-for(i in 1:length(slug)){
+for(i in 743:length(slug)){
   print(i)
   rb <- brick(paste0("/Volumes/Zoe's Home/NCARNARR/All/", BigDays.sfdfT$slug2[i], "/",BigDays.sfdfT$slug[i])) #<-- this is for varying NARR times
   CAPE <- raster(rb, layer = 375)
@@ -331,12 +333,15 @@ for(i in 1:length(slug)){
   VSTM <- raster(rb, layer = 325)
   UGRD500 <- raster(rb, layer = 117) 
   VGRD500 <- raster(rb, layer = 118) 
+  UGRD850 <- raster(rb, layer = 206) 
+  VGRD850 <- raster(rb, layer = 207)
   UGRDsfc <- raster(rb, layer = 293) 
   VGRDsfc <- raster(rb, layer = 294)  
   LCL <- raster(rb, layer = 319)
   SM <- sqrt(USTM^2 + VSTM^2)
   RATIO <- CAPE/abs(CIN)
-  BS <- sqrt(((UGRD500 - UGRDsfc)**2) + ((VGRD500 - VGRDsfc)**2))
+  BS_deep <- sqrt(((UGRD500 - UGRDsfc)**2) + ((VGRD500 - VGRDsfc)**2))
+  BS_shallow <- sqrt(((UGRD850 - UGRDsfc)**2) + ((VGRD850 - VGRDsfc)**2))
   avgCAPE <- c(avgCAPE, as.numeric(raster::extract(CAPE, BigDays.sfdfT[i, ], fun = mean)))
   avgsbCAPE <- c(avgsbCAPE, as.numeric(raster::extract(sbCAPE, BigDays.sfdfT[i, ], fun = mean)))
   maxCAPE <- c(maxCAPE, as.numeric(raster::extract(CAPE, BigDays.sfdfT[i, ], fun = max)))
@@ -358,8 +363,10 @@ for(i in 1:length(slug)){
   avgSM <- c(avgSM, as.numeric(raster::extract(SM, BigDays.sfdfT[i, ], fun = mean)))
   maxSM <- c(maxSM, as.numeric(raster::extract(SM, BigDays.sfdfT[i, ], fun = max)))
   avgRATIO <- c(avgRATIO, as.numeric(raster::extract(RATIO, BigDays.sfdfT[i, ], fun = mean)))
-  avgBS <- c(avgBS, as.numeric(raster::extract(BS, BigDays.sfdfT[i, ], fun = mean)))
-  maxBS <- c(maxBS, as.numeric(raster::extract(BS, BigDays.sfdfT[i, ], fun = max)))
+  avgBS_deep <- c(avgBS_deep, as.numeric(raster::extract(BS_deep, BigDays.sfdfT[i, ], fun = mean)))
+  maxBS_deep <- c(maxBS_deep, as.numeric(raster::extract(BS_deep, BigDays.sfdfT[i, ], fun = max)))  
+  avgBS_shallow <- c(avgBS_shallow, as.numeric(raster::extract(BS_shallow, BigDays.sfdfT[i, ], fun = mean)))
+  maxBS_shallow <- c(maxBS_shallow, as.numeric(raster::extract(BS_shallow, BigDays.sfdfT[i, ], fun = max)))
   avgLCL <- c(avgLCL, as.numeric(raster::extract(LCL, BigDays.sfdfT[i,], fun = mean)))
   maxLCL <- c(maxLCL, as.numeric(raster::extract(LCL, BigDays.sfdfT[i,], fun = max)))
   minLCL <- c(minLCL, as.numeric(raster::extract(LCL, BigDays.sfdfT[i,], fun = min)))
@@ -386,14 +393,16 @@ BigDays.sfdfT$avgUSTM <- avgUSTM
 BigDays.sfdfT$maxUSTM <- maxUSTM
 BigDays.sfdfT$avgVSTM <- avgVSTM
 BigDays.sfdfT$maxVSTM <- maxVSTM
-BigDays.sfdfT$avgBS <- avgBS
-BigDays.sfdfT$maxBS <- maxBS
+BigDays.sfdfT$avgBS_deep <- avgBS_deep
+BigDays.sfdfT$maxBS_deep <- maxBS_deep
+BigDays.sfdfT$avgBS_shallow <- avgBS_shallow
+BigDays.sfdfT$maxBS_shallow <- maxBS_shallow
 BigDays.sfdfT$avgRATIO <- avgRATIO
 BigDays.sfdfT$avgSM <- avgSM
 BigDays.sfdfT$maxSM <- maxSM
 BigDays.sfdfT$minLCL <- minLCL
 BigDays.sfdfT$maxLCL <- maxLCL
-BigDays.sfdfT$svgLCL <- avgLCL
+BigDays.sfdfT$avgLCL <- avgLCL
 ```
 
 Scale the variables to make them easier to read and input for models. 
