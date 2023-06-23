@@ -35,7 +35,7 @@ suppressMessages(library(gridExtra))
 
 The newest GIS shapefile contains missing geometries for more than 30% of the tornadoes. The number of missing geometries is highest after 1995. Instead here we use the csv file from https://www.spc.noaa.gov/wcm/#data  Use the start lon/lat and create a `sp` object then convert to `sf`. Set the coordinate reference system (crs) to ESPG 4326.
 ```{r}
-Tor.spdf <- read.csv(file = "1950-2018_actual_tornadoes.csv")
+Tor.spdf <- read.csv(file = "1950-2022_actual_tornadoes.csv")
 sp::coordinates(Tor.spdf) <- ~ slon + slat
 Tor.sfdf <- st_as_sf(Tor.spdf)
 st_crs(Tor.sfdf) <- 4326
